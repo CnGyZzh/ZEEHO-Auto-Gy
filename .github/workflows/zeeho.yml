@@ -33,7 +33,7 @@ jobs:
           test -n "$ZEEHO_USER_ID" || { echo "::error::缺少 ZEEHO_USER_ID"; exit 1; }
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -103,7 +103,7 @@ jobs:
 
       - name: 成功后发送邮件明细
         if: success()
-        uses: dawidd6/action-send-mail@v3
+        uses: dawidd6/action-send-mail@v6
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
           server_port: ${{ secrets.SMTP_PORT }}
