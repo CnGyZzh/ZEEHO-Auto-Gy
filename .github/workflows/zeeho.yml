@@ -1,0 +1,90 @@
+name: ZEEHO Auto Gy
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron 使用 UTC；23:07 UTC = 北京时间次日 07:07
+    - cron: "7 23 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zeeho-auto-gy
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Shanghai
+      ZEEHO_TOKEN: ${{ secrets.ZEEHO_TOKEN }}
+      ZEEHO_USER_ID: ${{ secrets.ZEEHO_USER_ID }}
+      ZEEHO_USER_NAME: ${{ secrets.ZEEHO_USER_NAME }}
+      ZEEHO_USER_AGENT: ${{ secrets.ZEEHO_USER_AGENT }}
+
+    steps:
+      - name: 检查 Secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ZEEHO_TOKEN" || { echo "::error::缺少 ZEEHO_TOKEN"; exit 1; }
+          test -n "$ZEEHO_USER_ID" || { echo "::error::缺少 ZEEHO_USER_ID"; exit 1; }
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 准备运行环境
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run
+          cd run
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund got@11 tough-cookie@4 iconv-lite@0.6
+
+          # 固定到已核对的上游提交，避免上游突然修改脚本。
+          curl --fail --location --retry 3             "https://raw.githubusercontent.com/cluck798/ZEEHO/a73a500856e22de8aa56bf98d59aff2dc0d2a84d/script/zeeho.js"             -o zeeho.js
+
+          # 上游 Node 模式会 require('./sendNotify')；这里仅输出日志，不上传任何通知凭据。
+          cat > sendNotify.js <<'EOF'
+          module.exports = {
+            sendNotify: async (title, body) => {
+              console.log("\n========== ZEEHO 运行汇总 ==========");
+              console.log(title || "");
+              console.log(body || "");
+              console.log("====================================\n");
+            }
+          };
+          EOF
+
+      - name: 生成本次账号配置
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd run
+          node - <<'NODE'
+          const fs = require("fs");
+          const token = (process.env.ZEEHO_TOKEN || "").replace(/^[Bb]earer\s+/,"").trim();
+          const userId = (process.env.ZEEHO_USER_ID || "").trim();
+          const userName = (process.env.ZEEHO_USER_NAME || "Gy").trim();
+          const userAgent = (process.env.ZEEHO_USER_AGENT || "okhttp/4.12.0").trim();
+
+          if (!token || !userId) throw new Error("ZEEHO_TOKEN / ZEEHO_USER_ID 不能为空");
+
+          // 上游脚本读取环境变量 zeeho_data，值必须是 JSON 数组。
+          const data = [{ token, userId, userName, userAgent }];
+          fs.writeFileSync("account.json", JSON.stringify(data));
+          NODE
+
+      - name: 执行签到 + 积分任务 + 盲盒
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd run
+          export zeeho_data="$(cat account.json)"
+          rm -f account.json
+          node zeeho.js
