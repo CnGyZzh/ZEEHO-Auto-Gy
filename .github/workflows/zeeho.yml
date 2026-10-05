@@ -3,8 +3,8 @@ name: ZEEHO Auto Gy
 on:
   workflow_dispatch:
   schedule:
-    # GitHub cron 使用 UTC；23:07 UTC = 北京时间次日 07:07
-    - cron: "7 23 * * *"
+    # GitHub cron 使用 UTC；02:00 UTC = 北京时间 10:00
+    - cron: "0 2 * * *"
 
 permissions:
   contents: read
@@ -46,10 +46,8 @@ jobs:
           npm init -y >/dev/null
           npm install --no-audit --no-fund got@11 tough-cookie@4 iconv-lite@0.6
 
-          # 固定到已核对的上游提交，避免上游突然修改脚本。
           curl --fail --location --retry 3             "https://raw.githubusercontent.com/cluck798/ZEEHO/a73a500856e22de8aa56bf98d59aff2dc0d2a84d/script/zeeho.js"             -o zeeho.js
 
-          # 上游 Node 模式会 require('./sendNotify')；这里仅输出日志，不上传任何通知凭据。
           cat > sendNotify.js <<'EOF'
           module.exports = {
             sendNotify: async (title, body) => {
@@ -75,7 +73,6 @@ jobs:
 
           if (!token || !userId) throw new Error("ZEEHO_TOKEN / ZEEHO_USER_ID 不能为空");
 
-          // 上游脚本读取环境变量 zeeho_data，值必须是 JSON 数组。
           const data = [{ token, userId, userName, userAgent }];
           fs.writeFileSync("account.json", JSON.stringify(data));
           NODE
@@ -87,4 +84,33 @@ jobs:
           cd run
           export zeeho_data="$(cat account.json)"
           rm -f account.json
-          node zeeho.js
+          node zeeho.js 2>&1 | tee zeeho.log
+
+      - name: 生成邮件明细
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd run
+          {
+            echo "ZEEHO 自动任务执行成功"
+            echo
+            echo "执行时间（北京时间）：$(date '+%Y-%m-%d %H:%M:%S')"
+            echo
+            echo "----- 任务明细 -----"
+            grep -E "签到任务|连续签到|创建动态|点赞动态|评论动态|分享动态|分享积分|删除动态|今日获得|共[0-9]+个账号|积分:" zeeho.log || cat zeeho.log
+          } > mail.txt
+
+      - name: 成功后发送邮件明细
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          secure: true
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "ZEEHO 每日任务成功 - ${{ github.run_number }}"
+          to: ${{ secrets.MAIL_TO }}
+          from: "ZEEHO Auto Gy"
+          body: file://run/mail.txt
