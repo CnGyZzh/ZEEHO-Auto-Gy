@@ -1,0 +1,5 @@
+account.json
+box.dat
+node_modules/
+.env
+*.log
