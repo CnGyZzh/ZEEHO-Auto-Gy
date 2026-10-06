@@ -3,11 +3,14 @@ name: ZEEHO Auto Gy
 on:
   workflow_dispatch:
   schedule:
-    # GitHub cron 使用 UTC；02:00 UTC = 北京时间 10:00
-    - cron: "0 2 * * *"
+    # 避开整点调度高峰：02:07 UTC = 北京时间 10:07
+    - cron: "7 2 * * *"
+    # 兜底：02:37 UTC = 北京时间 10:37；若当天主任务已成功则自动跳过
+    - cron: "37 2 * * *"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: zeeho-auto-gy
@@ -25,7 +28,32 @@ jobs:
       ZEEHO_USER_AGENT: ${{ secrets.ZEEHO_USER_AGENT }}
 
     steps:
+      - name: 判断兜底任务是否需要执行
+        id: guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+          # 手动运行和 10:07 主任务始终执行。
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$EVENT_SCHEDULE" != "37 2 * * *" ]; then
+            exit 0
+          fi
+
+          # 10:37 兜底只在今天尚无成功的 schedule 运行时执行。
+          TODAY="$(TZ=Asia/Shanghai date +%F)"
+          SUCCESS_COUNT="$(gh api             "repos/${{ github.repository }}/actions/workflows/zeeho.yml/runs?event=schedule&status=success&per_page=20"             --jq '[.workflow_runs[] | select((.run_started_at | fromdateiso8601 + 28800 | strftime("%Y-%m-%d")) == "'"$TODAY"'")] | length')"
+
+          if [ "$SUCCESS_COUNT" -gt 0 ]; then
+            echo "今天已有成功的定时运行，10:37 兜底跳过。"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 检查 Secrets
+        if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -33,11 +61,13 @@ jobs:
           test -n "$ZEEHO_USER_ID" || { echo "::error::缺少 ZEEHO_USER_ID"; exit 1; }
 
       - name: 安装 Node.js
+        if: steps.guard.outputs.run == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: 准备运行环境
+        if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -60,6 +90,7 @@ jobs:
           EOF
 
       - name: 生成本次账号配置
+        if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -78,6 +109,7 @@ jobs:
           NODE
 
       - name: 执行签到 + 积分任务 + 盲盒
+        if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -87,7 +119,7 @@ jobs:
           node zeeho.js 2>&1 | tee zeeho.log
 
       - name: 生成邮件明细
-        if: success()
+        if: steps.guard.outputs.run == 'true' && success()
         shell: bash
         run: |
           set -euo pipefail
@@ -102,7 +134,7 @@ jobs:
           } > mail.txt
 
       - name: 成功后发送邮件明细
-        if: success()
+        if: steps.guard.outputs.run == 'true' && success()
         uses: dawidd6/action-send-mail@v6
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
