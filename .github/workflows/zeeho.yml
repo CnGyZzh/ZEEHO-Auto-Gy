@@ -3,13 +3,11 @@ name: ZEEHO Auto Gy
 on:
   workflow_dispatch:
   schedule:
-    # GitHub 定时调度可能延迟，使用错峰的多时段兜底。
-    # UTC 23:47 / 02:17 / 06:37 / 10:07 = 北京时间 07:47 / 10:17 / 14:37 / 18:07。
-    # 同一北京时间自然日确认签到成功后，后续时段自动跳过。
-    - cron: "47 23 * * *"
-    - cron: "17 2 * * *"
-    - cron: "37 6 * * *"
-    - cron: "7 10 * * *"
+    # 北京时间每天中午 12:07 主签到，12:37 兜底。
+    # GitHub Actions 采用 UTC：04:07 / 04:37 UTC = 12:07 / 12:37 CST (UTC+8)。
+    # 定时调度可能延迟；同日真实签到成功后，兜底任务自动跳过。
+    - cron: "7 4 * * *"
+    - cron: "37 4 * * *"
 
 permissions:
   contents: read
