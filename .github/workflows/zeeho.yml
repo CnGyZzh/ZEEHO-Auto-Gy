@@ -3,10 +3,13 @@ name: ZEEHO Auto Gy
 on:
   workflow_dispatch:
   schedule:
-    # 避开整点调度高峰：02:07 UTC = 北京时间 10:07
-    - cron: "7 2 * * *"
-    # 兜底：02:37 UTC = 北京时间 10:37；若当天主任务已成功则自动跳过
-    - cron: "37 2 * * *"
+    # GitHub 定时调度可能延迟，使用错峰的多时段兜底。
+    # UTC 23:47 / 02:17 / 06:37 / 10:07 = 北京时间 07:47 / 10:17 / 14:37 / 18:07。
+    # 同一北京时间自然日确认签到成功后，后续时段自动跳过。
+    - cron: "47 23 * * *"
+    - cron: "17 2 * * *"
+    - cron: "37 6 * * *"
+    - cron: "7 10 * * *"
 
 permissions:
   contents: read
@@ -28,28 +31,39 @@ jobs:
       ZEEHO_USER_AGENT: ${{ secrets.ZEEHO_USER_AGENT }}
 
     steps:
-      - name: 判断兜底任务是否需要执行
+      - name: 判断今天是否已有真实签到成功
         id: guard
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
           echo "run=true" >> "$GITHUB_OUTPUT"
 
-          # 手动运行和 10:07 主任务始终执行。
-          if [ "${{ github.event_name }}" != "schedule" ] || [ "$EVENT_SCHEDULE" != "37 2 * * *" ]; then
+          # 手动执行始终允许运行，便于修复后主动验证。
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
+            echo "手动任务：执行签到校验。"
             exit 0
           fi
 
-          # 10:37 兜底只在今天尚无成功的 schedule 运行时执行。
           TODAY="$(TZ=Asia/Shanghai date +%F)"
-          SUCCESS_COUNT="$(gh api             "repos/${{ github.repository }}/actions/workflows/zeeho.yml/runs?event=schedule&status=success&per_page=20"             --jq '[.workflow_runs[] | select((.run_started_at | fromdateiso8601 + 28800 | strftime("%Y-%m-%d")) == "'"$TODAY"'")] | length')"
-
+          # 仅信任同一工作流代码提交的成功执行；旧版误报成功的运行不会误拦截。
+          # GitHub Actions 的 success 仅在下方签到验证通过时才成立。
+          SUCCESS_COUNT="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/zeeho.yml/runs?status=success&per_page=100" \
+              | jq --arg today "$TODAY" --arg sha "$GITHUB_SHA" '
+                  [.workflow_runs[]
+                    | select(.head_sha == $sha)
+                    | select(.event == "schedule" or .event == "workflow_dispatch")
+                    | select(.run_started_at != null)
+                    | select((.run_started_at | fromdateiso8601 + 28800 | strftime("%Y-%m-%d")) == $today)
+                  ] | length'
+          )"
           if [ "$SUCCESS_COUNT" -gt 0 ]; then
-            echo "今天已有成功的定时运行，10:37 兜底跳过。"
+            echo "北京时间 $TODAY 已有核验通过的签到，跳过本次兜底。"
             echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "北京时间 $TODAY 未发现核验通过的签到，开始执行。"
           fi
 
       - name: 检查 Secrets
@@ -76,7 +90,7 @@ jobs:
           npm init -y >/dev/null
           npm install --no-audit --no-fund got@11 tough-cookie@4 iconv-lite@0.6
 
-          curl --fail --location --retry 3             "https://raw.githubusercontent.com/cluck798/ZEEHO/a73a500856e22de8aa56bf98d59aff2dc0d2a84d/script/zeeho.js"             -o zeeho.js
+          curl --fail --location --retry 3             "https://raw.githubusercontent.com/cluck798/ZEEHO/3b587a80650e34f6c4eab9f9414468e2ac8cbf21/script/zeeho.js"             -o zeeho.js
 
           cat > sendNotify.js <<'EOF'
           module.exports = {
@@ -109,6 +123,7 @@ jobs:
           NODE
 
       - name: 执行签到 + 积分任务 + 盲盒
+        id: execute
         if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
@@ -118,23 +133,77 @@ jobs:
           rm -f account.json
           node zeeho.js 2>&1 | tee zeeho.log
 
-      - name: 生成邮件明细
-        if: steps.guard.outputs.run == 'true' && success()
+      - name: 核验真实签到并生成安全报告
+        id: verify
+        if: ${{ always() && steps.guard.outputs.run == 'true' }}
         shell: bash
+        env:
+          EXECUTION_OUTCOME: ${{ steps.execute.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          cd run
-          {
-            echo "ZEEHO 自动任务执行成功"
-            echo
-            echo "执行时间（北京时间）：$(date '+%Y-%m-%d %H:%M:%S')"
-            echo
-            echo "----- 任务明细 -----"
-            grep -E "签到任务|连续签到|创建动态|点赞动态|评论动态|分享动态|分享积分|删除动态|今日获得|共[0-9]+个账号|积分:" zeeho.log || cat zeeho.log
-          } > mail.txt
+          mkdir -p run
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
 
-      - name: 成功后发送邮件明细
-        if: steps.guard.outputs.run == 'true' && success()
+          log_file = Path("run/zeeho.log")
+          log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.is_file() else ""
+          # 禁止将上游原始日志（可能包含身份信息）复制进通知邮件。
+          sign = re.search(r"签到任务:\s*(签到成功(?:\s*\+\s*\d+积分)?|今日已签到)", log)
+          streak = re.search(r"连续签到\s*(\d+)\s*天", log)
+          summary = re.search(r"共\s*(\d+)\s*个账号[,，]\s*成功\s*(\d+)\s*个[,，]\s*失败\s*(\d+)\s*个", log)
+          gain = re.search(r"今日获得:\s*签到(\d+)\s*\+\s*盲盒(\d+)\s*\+\s*互动(\d+)\s*=\s*共(\d+)分", log)
+          http_401 = bool(re.search(r"Response code 401|401\s*\(Unauthorized\)|\bUnauthorized\b", log, re.I))
+          sign_failed = bool(re.search(r"(?:⛔️?\s*签到任务:|⛔️?\s*签到失败!|❌\s*签到任务:)", log))
+          streak_days = int(streak.group(1)) if streak else 0
+          summary_ok = bool(summary and int(summary.group(1)) == 1 and int(summary.group(2)) == 1 and int(summary.group(3)) == 0)
+          passed = (os.getenv("EXECUTION_OUTCOME") == "success" and
+                    bool(sign) and streak_days > 0 and summary_ok and
+                    not http_401 and not sign_failed)
+
+          reasons = []
+          if os.getenv("EXECUTION_OUTCOME") != "success":
+              reasons.append("脚本执行未正常完成")
+          if not sign:
+              reasons.append("未确认签到成功或今日已签到")
+          if streak_days < 1:
+              reasons.append("连续签到记录未能验证")
+          if not summary_ok:
+              reasons.append("账号执行汇总不符合预期")
+          if http_401:
+              reasons.append("发现 HTTP 401 未授权响应")
+          if sign_failed:
+              reasons.append("签到接口报告失败")
+
+          lines = [
+              "ZEEHO 每日任务：" + ("签到成功（已核验）" if passed else "签到失败 / 待排查"),
+              "执行结果：" + ("成功" if passed else "失败"),
+              "北京时间：" + __import__("datetime").datetime.now(__import__("datetime").timezone(__import__("datetime").timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"),
+              "运行链接：" + os.getenv("RUN_URL", ""),
+          ]
+          if sign:
+              lines.append("签到状态：" + sign.group(1))
+          if streak:
+              lines.append("连续签到：" + str(streak_days) + " 天")
+          if summary:
+              lines.append("账号汇总：" + summary.group(1) + " 个账号 / 成功 " + summary.group(2) + " / 失败 " + summary.group(3))
+          if gain:
+              lines.append("积分统计：签到 " + gain.group(1) + " / 盲盒 " + gain.group(2) + " / 互动 " + gain.group(3) + " / 合计 " + gain.group(4))
+          if reasons:
+              lines.append("异常原因：" + "；".join(reasons))
+          Path("run/mail.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("ZEEHO 签到核验：" + ("通过" if passed else "未通过"))
+          for reason in reasons:
+              print("核验异常：" + reason)
+          sys.exit(0 if passed else 1)
+          PY
+
+      - name: 发送签到结果邮件（成功和失败均通知）
+        if: ${{ always() && steps.guard.outputs.run == 'true' }}
+        continue-on-error: true
         uses: dawidd6/action-send-mail@v6
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
@@ -142,7 +211,7 @@ jobs:
           secure: true
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "ZEEHO 每日任务成功 - ${{ github.run_number }}"
+          subject: "ZEEHO 每日签到${{ steps.verify.outcome == 'success' && '成功' || '失败' }} - ${{ github.run_number }}"
           to: ${{ secrets.MAIL_TO }}
           from: "ZEEHO Auto Gy"
           body: file://run/mail.txt
