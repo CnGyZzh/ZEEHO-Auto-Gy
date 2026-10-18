@@ -157,14 +157,14 @@ jobs:
           with open("zeeho.log", "w", encoding="utf-8") as log:
               for line in process.stdout:
                   safe = line
-                  for sensitive in (token, re.sub(r"(?i)^bearer\\s+", "", token), user_id):
+                  for sensitive in (token, re.sub(r"(?i)^bearer\s+", "", token), user_id):
                       if sensitive:
                           safe = safe.replace(sensitive, "[REDACTED]")
-                  safe = re.sub(r"(?i)(bearer\\s+)[a-z0-9._=-]+", r"\\1[REDACTED]", safe)
+                  safe = re.sub(r"(?i)(bearer\s+)[a-z0-9._=-]+", r"\1[REDACTED]", safe)
                   print(safe, end="", flush=True)
                   log.write(safe)
                   log.flush()
-                  if re.search(r"Response code 401|401\\s*\\(Unauthorized\\)|\\bUnauthorized\\b", line, re.I):
+                  if re.search(r"Response code 401|401\s*\(Unauthorized\)|\bUnauthorized\b", line, re.I):
                       unauthorized = True
                       process.terminate()
                       break
