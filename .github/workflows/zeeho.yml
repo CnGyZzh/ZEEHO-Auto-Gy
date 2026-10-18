@@ -2,10 +2,6 @@ name: ZEEHO Auto Gy
 
 on:
   workflow_dispatch:
-  # 一次性自测入口，测试结束移除。
-  push:
-    branches: [main]
-    paths: [".github/workflows/zeeho.yml"]
   schedule:
     # 北京时间每天中午 12:07 主签到，12:37 兜底。
     # GitHub Actions 采用 UTC：04:07 / 04:37 UTC = 12:07 / 12:37 CST (UTC+8)。
