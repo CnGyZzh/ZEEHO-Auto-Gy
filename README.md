@@ -4,9 +4,9 @@
 
 **极核 ZEEHO · GitHub Actions 自动任务**
 
-[![Profile](https://img.shields.io/badge/CnGyZzh-Gy-181717?logo=github)](https://github.com/CnGyZzh)
-[![Level](https://img.shields.io/badge/Hub-Level-6f42c1)](https://github.com/CnGyZzh/Level)
-[![Actions](https://img.shields.io/badge/GitHub_Actions-Auto-2088FF?logo=githubactions)](https://github.com/CnGyZzh/ZEEHO-Auto-Gy/actions)
+[![Profile](https://img.shields.io/badge/Gyziel-Gy-181717?logo=github)](https://github.com/Gyziel)
+[![Level](https://img.shields.io/badge/Hub-Level-6f42c1)](https://github.com/Gyziel/Level)
+[![Actions](https://img.shields.io/badge/GitHub_Actions-Auto-2088FF?logo=githubactions)](https://github.com/Gyziel/ZEEHO-Auto-Gy/actions)
 
 </div>
 
@@ -57,7 +57,7 @@ Actions → **ZEEHO Auto Gy** → **Run workflow**。
 
 ## Navigation
 
-**[CnGyZzh](https://github.com/CnGyZzh)** · **[Level](https://github.com/CnGyZzh/Level)** · **[HyperMax](https://github.com/CnGyZzh/HyperMax)** · **[WeType Monet](https://github.com/CnGyZzh/WeType_Monet-Gy)**
+**[Gyziel](https://github.com/Gyziel)** · **[Level](https://github.com/Gyziel/Level)** · **[HyperMax](https://github.com/Gyziel/HyperMax)** · **[WeType Monet](https://github.com/Gyziel/WeType_Monet-Gy)**
 
 ---
 
